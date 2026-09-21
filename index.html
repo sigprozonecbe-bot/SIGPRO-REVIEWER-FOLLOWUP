@@ -47,22 +47,55 @@ th{background:#f8fafc;font-size:13px}.muted{color:var(--muted)}
 .empty{text-align:center;padding:35px;color:var(--muted)}
 .small{font-size:12px}
 @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.grid2,.grid3{grid-template-columns:1fr}header{flex-direction:column;align-items:flex-start}}
+
+.login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0f2f73,#2563eb);padding:20px}.login-card{width:100%;max-width:430px;background:#fff;border-radius:18px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.25)}.login-logo{font-size:42px;text-align:center}.login-card h2{text-align:center;margin:8px 0 4px}.login-card p{text-align:center;color:var(--muted);margin:0 0 22px}.login-card label{display:block;margin:13px 0;font-weight:600}.login-card .login-btn{width:100%;margin-top:10px}.login-error{display:none;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:10px;border-radius:8px;margin:12px 0;font-size:13px}.user-pill{display:inline-block;background:rgba(255,255,255,.16);padding:7px 10px;border-radius:999px;font-size:12px;margin-right:8px}
+
+@media (max-width: 700px){
+  header{padding:16px;align-items:flex-start;flex-direction:column}.brand h1{font-size:20px}.container{padding:12px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metric{font-size:22px}.card{padding:12px}.toolbar{align-items:stretch}.toolbar input,.toolbar select{max-width:none}.table-wrap{overflow-x:auto}.login-box{width:calc(100% - 24px)!important;margin:12px!important}.grid3{grid-template-columns:1fr!important}.modal-card{width:calc(100% - 20px)!important;max-height:90vh;overflow:auto}.header-actions{width:100%;display:flex;flex-wrap:wrap;gap:6px}.header-actions button{margin-left:0}.tab{flex:1 1 45%;text-align:center}
+}
 </style>
 </head>
 <body>
+<script>
+/* When this file is opened directly from a phone/laptop file manager, redirect to the hosted app.
+   Firebase authentication is designed to run from a web origin, not file://. */
+(function(){
+  const LIVE_APP='https://sigprozonecbe-bot.github.io/SIGPRO-REVIEWER-FOLLOWUP/';
+  if(location.protocol==='file:'){
+    location.replace(LIVE_APP);
+  }
+})();
+</script>
+<div id="loginScreen" class="login-screen">
+  <div class="login-card">
+    <div class="login-logo">📝</div>
+    <h2>SIGPRO Technologies</h2>
+    <p>Reviewer Follow-up App</p>
+    <div id="loginError" class="login-error"></div>
+    <form id="loginForm">
+      <label>Email / Username<input id="loginEmail" type="email" placeholder="Enter your registered email" autocomplete="username"></label>
+      <label>Password<input id="loginPassword" type="password" placeholder="Enter your password" autocomplete="current-password"></label>
+      <button type="submit" class="btn-primary login-btn">Login</button>
+    </form>
+  </div>
+</div>
+<div id="appShell" style="display:none">
 <header>
   <div class="brand">
     <h1>📝 SIGPRO Reviewer Follow-up App</h1>
     <p>Owner • Boss • Editor — Manuscript & Reviewer Management</p>
   </div>
   <div class="header-actions">
+    <span class="user-pill" id="currentUser">Signed in</span>
     <button class="btn-light" onclick="openModal()">＋ New Manuscript</button>
     <button class="btn-light" onclick="exportData()">Export</button>
+    <button class="btn-light" onclick="logoutUser()">Logout</button>
   </div>
 </header>
 
 <div class="container">
   <div id="alerts"></div>
+  <div id="migrationNotice"></div>
 
   <div class="cards">
     <div class="card"><div class="label">Total Papers</div><div class="metric" id="mTotal">0</div></div>
@@ -102,7 +135,7 @@ th{background:#f8fafc;font-size:13px}.muted{color:var(--muted)}
       <button class="btn-primary" onclick="openModal()">＋ Add Manuscript</button>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Priority</th><th>Journal</th><th>Manuscript ID</th><th>Author</th><th>Stage</th><th>Reviewer Progress</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Priority</th><th>Journal</th><th>Manuscript ID</th><th>Author</th><th>Stage</th><th>Entered By</th><th>Reviewer Progress</th><th>Actions</th></tr></thead>
       <tbody id="paperTable"></tbody>
     </table></div>
   </section>
@@ -151,164 +184,211 @@ th{background:#f8fafc;font-size:13px}.muted{color:var(--muted)}
   </div>
 </div>
 </div>
+</div>
+
+</div>
 
 <script>
-const KEY='sigpro_reviewer_followup_v1';
-let papers=JSON.parse(localStorage.getItem(KEY)||'[]');
-let activeTab='dashboard';
-
+/* SIGPRO Reviewer Follow-up — Firebase REST version.
+   Uses Firebase Authentication + Realtime Database REST APIs so the same HTML
+   can be opened in a mobile browser without depending on the Firebase JS SDK. */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA9-fweuOUy3WDxSXa-jNPZRyT8rKF6GMI",
+  authDomain: "sigpro-reviewer-follow-up.firebaseapp.com",
+  databaseURL: "https://sigpro-reviewer-follow-up-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "sigpro-reviewer-follow-up",
+  storageBucket: "sigpro-reviewer-follow-up.firebasestorage.app",
+  messagingSenderId: "1091908244625",
+  appId: "1:1091908244625:web:bf717e0e6f4b6d36d89b30"
+};
+const AUTH_URL='https://identitytoolkit.googleapis.com/v1';
+const TOKEN_URL='https://securetoken.googleapis.com/v1/token';
+const DB_URL=FIREBASE_CONFIG.databaseURL;
+const SESSION_KEY='sigpro_reviewer_firebase_session_v2';
+let papers=[]; let activeTab='dashboard'; let currentUser=null; let pollTimer=null; let migrationRunning=false;
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
-function save(){localStorage.setItem(KEY,JSON.stringify(papers)); renderAll()}
 function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function showLoginError(msg){const e=document.getElementById('loginError');e.textContent=msg;e.style.display='block'}
+function clearLoginError(){const e=document.getElementById('loginError');e.textContent='';e.style.display='none'}
+function getSession(){try{return JSON.parse(localStorage.getItem(SESSION_KEY)||'null')}catch(e){return null}}
+function saveSession(x){localStorage.setItem(SESSION_KEY,JSON.stringify(x))}
+function clearSession(){localStorage.removeItem(SESSION_KEY)}
+async function signIn(email,password){
+  const r=await fetch(`${AUTH_URL}/accounts:signInWithPassword?key=${encodeURIComponent(FIREBASE_CONFIG.apiKey)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,returnSecureToken:true})});
+  const j=await r.json(); if(!r.ok) throw new Error(j?.error?.message||'LOGIN_FAILED');
+  return {email:j.email,idToken:j.idToken,refreshToken:j.refreshToken,localId:j.localId,expiresAt:Date.now()+Number(j.expiresIn||3600)*1000};
+}
+async function refreshSession(){
+  const s=getSession(); if(!s?.refreshToken) return false;
+  const r=await fetch(`${TOKEN_URL}?key=${encodeURIComponent(FIREBASE_CONFIG.apiKey)}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`grant_type=refresh_token&refresh_token=${encodeURIComponent(s.refreshToken)}`});
+  const j=await r.json(); if(!r.ok){clearSession();return false;}
+  saveSession({email:s.email,localId:j.user_id,idToken:j.id_token,refreshToken:j.refresh_token,expiresAt:Date.now()+Number(j.expires_in||3600)*1000});
+  return true;
+}
+async function validToken(){
+  let s=getSession(); if(!s?.idToken)return null;
+  if(Date.now()>Number(s.expiresAt||0)-60000){if(!(await refreshSession()))return null;s=getSession()}
+  return s.idToken;
+}
+async function dbRequest(path,options={}){
+  let token=await validToken(); if(!token) throw new Error('AUTH_REQUIRED');
+  const doReq=async()=>fetch(`${DB_URL}/${path}.json?auth=${encodeURIComponent(token)}`,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});
+  let r=await doReq();
+  if(r.status===401||r.status===403){if(await refreshSession()){token=await validToken();r=await fetch(`${DB_URL}/${path}.json?auth=${encodeURIComponent(token)}`,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}})}}
+  const text=await r.text();let j=null;try{j=text?JSON.parse(text):null}catch(e){j=text}
+  if(!r.ok) throw new Error(typeof j==='string'?j:(j?.error||`HTTP_${r.status}`));
+  return j;
+}
+async function loadSharedPapers(){
+  try{const data=await dbRequest('reviewerFollowup/papers');papers=data?Object.values(data):[];renderAll();}catch(err){console.error(err);showDbError(err)}
+}
+function showDbError(err){const msg=(err&&err.message)||'';document.getElementById('migrationNotice').innerHTML=msg.toLowerCase().includes('permission')||msg.toLowerCase().includes('denied')?'<div class="alert danger"><b>Shared database access is blocked.</b> Firebase Rules must allow authenticated users.</div>':'<div class="alert danger"><b>Could not connect to the shared database.</b> Check your internet connection and Firebase configuration.</div>'}
+async function migrateLocalPapersOnce(){
+  if(!currentUser||migrationRunning)return;
+  migrationRunning=true;
+  try{
+    // The original app stored manuscripts under this key.
+    // We only READ this legacy data; we never delete it.
+    const legacyKeys=[
+      'sigpro_reviewer_followup_v1',
+      'SIGPRO_Reviewer_Followup_Data',
+      'sigpro_reviewer_followup_data'
+    ];
+    let local=[];
+    for(const key of legacyKeys){
+      try{
+        const raw=localStorage.getItem(key);
+        if(raw){
+          const parsed=JSON.parse(raw);
+          if(Array.isArray(parsed)) local.push(...parsed);
+          else if(parsed && typeof parsed==='object' && Array.isArray(parsed.papers)) local.push(...parsed.papers);
+        }
+      }catch(e){console.warn('Legacy data read failed for',key,e)}
+    }
 
-function priority(p){
-  if(p.stage==='Acceptance Comments' || p.stage==='Next Stage') return 'HIGH';
-  if(p.stage==='Revision' || p.stage==='Re-invite Reviewers') return 'MEDIUM';
-  if(p.stage==='Completed') return 'COMPLETED';
-  return 'NORMAL';
-}
-function badge(p){
-  const x=priority(p); const cls=x==='HIGH'?'high':x==='MEDIUM'?'medium':x==='COMPLETED'?'complete':'normal';
-  return `<span class="badge ${cls}">${x}</span>`;
-}
-function progress(p){
-  const rc=p.reviewers.filter(r=>r.commentsUploaded).length;
-  const ac=p.reviewers.filter(r=>r.acceptanceUploaded).length;
-  return `<div class="small">Reviewer comments: <b>${rc}/3</b><br>Acceptance comments: <b>${ac}/3</b></div>`;
-}
-function renderAll(){renderMetrics();renderAlerts();renderPriority();renderPapers();renderAcceptance();renderJournals()}
+    // Remove exact duplicates from the collected legacy records.
+    const seen=new Set();
+    local=local.filter(item=>{
+      if(!item)return false;
+      const k=String(item.id||'')+'|'+String(item.journal||'').trim().toLowerCase()+'|'+String(item.mid||'').trim().toLowerCase();
+      if(seen.has(k))return false;
+      seen.add(k);
+      return true;
+    });
 
-function renderMetrics(){
-  document.getElementById('mTotal').textContent=papers.length;
-  document.getElementById('mAcceptance').textContent=papers.filter(p=>priority(p)==='HIGH').length;
-  document.getElementById('mRevision').textContent=papers.filter(p=>priority(p)==='MEDIUM' && p.stage==='Revision').length;
-  document.getElementById('mFollow').textContent=papers.filter(p=>priority(p)==='NORMAL').length;
-  document.getElementById('mComplete').textContent=papers.filter(p=>priority(p)==='COMPLETED').length;
-}
-function renderAlerts(){
-  let html='';
-  papers.forEach(p=>{
-    const rc=p.reviewers.filter(r=>r.commentsUploaded).length;
-    const ac=p.reviewers.filter(r=>r.acceptanceUploaded).length;
-    if(rc>=2 && !['Revision','Re-invite Reviewers','Acceptance Comments','Next Stage','Completed'].includes(p.stage))
-      html+=`<div class="alert">🔔 <b>REVISION ALERT:</b> ${esc(p.mid)} has ${rc} reviewer comments uploaded. Revision stage required.</div>`;
-    if(ac>=2 && p.stage!=='Completed')
-      html+=`<div class="alert danger">🔔 <b>ACCEPTANCE ALERT:</b> ${esc(p.mid)} has ${ac} acceptance comments uploaded. Acceptance stage requires attention.</div>`;
-  });
-  document.getElementById('alerts').innerHTML=html;
-}
-function renderPriority(){
-  const list=papers.filter(p=>priority(p)==='HIGH').sort((a,b)=>a.date.localeCompare(b.date));
-  document.getElementById('priorityList').innerHTML=list.length?list.map(p=>`
-    <div class="paper-row">
-      <div><b>${esc(p.mid)}</b><br><span class="muted">${esc(p.journal)} • ${esc(p.author)}</span></div>
-      <div>${badge(p)} <button class="btn-primary" onclick="editPaper('${p.id}')">Open</button></div>
-    </div>`).join(''):'<div class="empty">No acceptance-priority papers currently.</div>';
-}
-function renderPapers(){
-  const q=(document.getElementById('search')?.value||'').toLowerCase();
-  const sf=document.getElementById('stageFilter')?.value||'';
-  const pf=document.getElementById('priorityFilter')?.value||'';
-  let arr=papers.filter(p=>(!q||[p.journal,p.mid,p.author].join(' ').toLowerCase().includes(q))&&(!sf||p.stage===sf)&&(!pf||priority(p)===pf));
-  document.getElementById('paperTable').innerHTML=arr.length?arr.map(p=>`<tr>
-    <td>${badge(p)}</td><td>${esc(p.journal)}</td><td><b>${esc(p.mid)}</b></td><td>${esc(p.author)}</td>
-    <td>${esc(p.stage)}</td><td>${progress(p)}</td>
-    <td><button class="btn-primary" onclick="editPaper('${p.id}')">Open</button>
-    <button class="btn-danger" onclick="deletePaper('${p.id}')">Delete</button></td>
-  </tr>`).join(''):`<tr><td colspan="7" class="empty">No manuscripts found.</td></tr>`;
-}
-function renderAcceptance(){
-  const arr=papers.filter(p=>priority(p)==='HIGH');
-  document.getElementById('acceptanceList').innerHTML=arr.length?arr.map(p=>`
-    <div class="paper-row"><div><b>${esc(p.mid)}</b><br>${esc(p.journal)}<br><span class="muted">${esc(p.author)}</span></div>
-    <div>${progress(p)} ${badge(p)} <button class="btn-primary" onclick="editPaper('${p.id}')">Open</button></div></div>`).join(''):'<div class="empty">No acceptance-priority papers.</div>';
-}
-function renderJournals(){
-  const groups={}; papers.forEach(p=>(groups[p.journal||'Unnamed Journal']??=[]).push(p));
-  const names=Object.keys(groups).sort();
-  document.getElementById('journalList').innerHTML=names.length?names.map(j=>`
-    <div class="journal-block"><div class="journal-title">📚 ${esc(j)} — ${groups[j].length} paper(s)</div>
-    ${groups[j].map(p=>`<div class="paper-row"><div><b>${esc(p.mid)}</b><br><span class="muted">${esc(p.author)}</span></div>
-    <div>${badge(p)} <button class="btn-primary" onclick="editPaper('${p.id}')">Open</button></div></div>`).join('')}</div>`).join(''):'<div class="empty">No journals yet.</div>';
-}
+    if(!local.length){
+      migrationRunning=false;
+      return;
+    }
 
-function showTab(tab,btn){
-  activeTab=tab;
-  ['dashboard','papers','acceptance','journals'].forEach(x=>document.getElementById(x).style.display=x===tab?'block':'none');
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active')); btn.classList.add('active');
-}
-function openModal(id=null){
-  document.getElementById('modal').classList.add('show');
-  document.getElementById('editId').value=id||'';
-  document.getElementById('modalTitle').textContent=id?'Edit Manuscript':'New Manuscript';
-  if(id){
-    const p=papers.find(x=>x.id===id);
-    document.getElementById('date').value=p.date;document.getElementById('journal').value=p.journal;
-    document.getElementById('mid').value=p.mid;document.getElementById('author').value=p.author;
-    document.getElementById('stage').value=p.stage;document.getElementById('notes').value=p.notes||'';
-    renderReviewerInputs(p.reviewers);
-  }else{
-    ['date','journal','mid','author','notes'].forEach(x=>document.getElementById(x).value='');
-    document.getElementById('date').value=new Date().toISOString().slice(0,10);
-    document.getElementById('stage').value='Reviewer Assignment';
-    renderReviewerInputs();
+    // Read the current shared database first.
+    const shared=await dbRequest('reviewerFollowup/papers');
+    const sharedList=shared?Object.values(shared):[];
+    const byId=new Map(sharedList.map(x=>[String(x.id),x]));
+    const byKey=new Map(sharedList.map(x=>[
+      `${String(x.journal||'').trim().toLowerCase()}|${String(x.mid||'').trim().toLowerCase()}`,x
+    ]));
+
+    let added=0, updated=0;
+    for(const item of local){
+      if(!item||!item.id)continue;
+      const key=`${String(item.journal||'').trim().toLowerCase()}|${String(item.mid||'').trim().toLowerCase()}`;
+      const existing=byId.get(String(item.id))||byKey.get(key);
+
+      if(existing){
+        // Do not overwrite a shared record with older local data.
+        // Only fill the Entered By fields if they are missing.
+        if(!existing.enteredBy){
+          const payload={
+            ...existing,
+            enteredBy:item.enteredBy||currentUser.email||'Unknown',
+            enteredByEmail:item.enteredByEmail||currentUser.email||'',
+            updatedBy:currentUser.email||existing.updatedBy||'',
+            updatedAt:existing.updatedAt||new Date().toISOString()
+          };
+          await dbRequest(`reviewerFollowup/papers/${encodeURIComponent(existing.id)}`,{
+            method:'PUT',body:JSON.stringify(payload)
+          });
+          byId.set(String(existing.id),payload);
+          updated++;
+        }
+        continue;
+      }
+
+      const payload={
+        ...item,
+        id:String(item.id),
+        enteredBy:item.enteredBy||currentUser.email||'Unknown',
+        enteredByEmail:item.enteredByEmail||currentUser.email||'',
+        updatedBy:currentUser.email||'',
+        updatedAt:new Date().toISOString()
+      };
+
+      await dbRequest(`reviewerFollowup/papers/${encodeURIComponent(payload.id)}`,{
+        method:'PUT',body:JSON.stringify(payload)
+      });
+      byId.set(String(payload.id),payload);
+      byKey.set(key,payload);
+      added++;
+    }
+
+    if(added||updated){
+      await loadSharedPapers();
+      const note=[];
+      if(added)note.push(`Imported ${added} paper(s) from this device`);
+      if(updated)note.push(`updated ${updated} existing record(s)`);
+      document.getElementById('migrationNotice').innerHTML=
+        `<div class="alert success">✓ ${note.join(' and ')}. All members can now see the shared papers.</div>`;
+      setTimeout(()=>{document.getElementById('migrationNotice').innerHTML=''},8000);
+    }
+  }catch(e){
+    console.error('Migration failed',e);
+    document.getElementById('migrationNotice').innerHTML=
+      `<div class="alert danger"><b>Shared sync could not finish.</b> Your original local papers were not deleted. ${esc(e.message||'Please try again after checking your connection.')}</div>`;
+  }finally{
+    migrationRunning=false;
   }
 }
-function closeModal(){document.getElementById('modal').classList.remove('show')}
-function renderReviewerInputs(rs){
-  rs=rs||[{}, {}, {}];
-  document.getElementById('reviewers').innerHTML=rs.map((r,i)=>`
-    <div class="reviewer-card">
-      <h4>Reviewer ${i+1}</h4>
-      <div class="grid3">
-        <label>Reviewer Name<input id="r${i}name" value="${esc(r.name||'')}" placeholder="Reviewer name"></label>
-        <label>Assign Date<input type="date" id="r${i}assign" value="${r.assign||''}"></label>
-        <label>Agreed Date<input type="date" id="r${i}agree" value="${r.agree||''}"></label>
-        <label>Comments Upload Deadline<input type="date" id="r${i}deadline" value="${r.deadline||''}"></label>
-        <label>Comments Follow-up Date<input type="date" id="r${i}follow" value="${r.follow||''}"></label>
-        <label>Comments Upload Date<input type="date" id="r${i}commentDate" value="${r.commentDate||''}"></label>
-        <label>Re-invite Date<input type="date" id="r${i}reinvite" value="${r.reinvite||''}"></label>
-        <label>Re-invite Agreed Date<input type="date" id="r${i}reagree" value="${r.reagree||''}"></label>
-        <label>Acceptance Comments Deadline<input type="date" id="r${i}adeadline" value="${r.adeadline||''}"></label>
-        <label>Acceptance Follow-up Date<input type="date" id="r${i}afollow" value="${r.afollow||''}"></label>
-        <label>Acceptance Upload Date<input type="date" id="r${i}acommentDate" value="${r.acommentDate||''}"></label>
-        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="r${i}uploaded" ${r.commentsUploaded?'checked':''} style="width:auto"> Reviewer Comments Uploaded</label>
-        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="r${i}auploaded" ${r.acceptanceUploaded?'checked':''} style="width:auto"> Acceptance Comments Uploaded</label>
-      </div>
-    </div>`).join('');
+async function startApp(user){
+  currentUser=user; document.getElementById('loginScreen').style.display='none';document.getElementById('appShell').style.display='block';document.getElementById('currentUser').textContent=`${user.email} • Full Access`;
+  await loadSharedPapers(); await migrateLocalPapersOnce(); await loadSharedPapers();
+  clearInterval(pollTimer); pollTimer=setInterval(()=>{if(currentUser)loadSharedPapers()},2500);
 }
-function getReviewers(){
-  return [0,1,2].map(i=>({
-    name:document.getElementById(`r${i}name`).value.trim(),
-    assign:document.getElementById(`r${i}assign`).value,
-    agree:document.getElementById(`r${i}agree`).value,
-    deadline:document.getElementById(`r${i}deadline`).value,
-    follow:document.getElementById(`r${i}follow`).value,
-    commentDate:document.getElementById(`r${i}commentDate`).value,
-    reinvite:document.getElementById(`r${i}reinvite`).value,
-    reagree:document.getElementById(`r${i}reagree`).value,
-    adeadline:document.getElementById(`r${i}adeadline`).value,
-    afollow:document.getElementById(`r${i}afollow`).value,
-    acommentDate:document.getElementById(`r${i}acommentDate`).value,
-    commentsUploaded:document.getElementById(`r${i}uploaded`).checked,
-    acceptanceUploaded:document.getElementById(`r${i}auploaded`).checked
-  }));
+window.loginUser=async function(){
+  clearLoginError();const email=document.getElementById('loginEmail').value.trim();const password=document.getElementById('loginPassword').value;
+  if(!email||!password){showLoginError('Enter your registered email and password.');return}
+  const btn=document.querySelector('.login-btn');if(btn){btn.disabled=true;btn.textContent='Signing in...'}
+  try{const u=await signIn(email,password);saveSession(u);await startApp(u)}catch(err){console.error(err);let m='Login failed. Check your email/password.';if(String(err.message).includes('INVALID_LOGIN_CREDENTIALS'))m='Incorrect email or password.';if(String(err.message).includes('USER_DISABLED'))m='This account is disabled.';if(String(err.message).includes('TOO_MANY_ATTEMPTS_TRY_LATER'))m='Too many attempts. Try again later.';showLoginError(m)}finally{if(btn){btn.disabled=false;btn.textContent='Login'}}
+};
+window.logoutUser=async function(){clearInterval(pollTimer);pollTimer=null;clearSession();currentUser=null;papers=[];document.getElementById('appShell').style.display='none';document.getElementById('loginScreen').style.display='flex'};
+async function initApp(){
+  const s=getSession();
+  if(s){if(Date.now()>Number(s.expiresAt||0)-60000)await refreshSession();const ss=getSession();if(ss?.idToken){await startApp({email:ss.email,localId:ss.localId}) ;return}}
+  document.getElementById('loginScreen').style.display='flex';document.getElementById('appShell').style.display='none';
 }
-function savePaper(){
-  const data={date:date.value,journal:journal.value.trim(),mid:mid.value.trim(),author:author.value.trim(),reviewers:getReviewers(),stage:stage.value,notes:notes.value.trim()};
-  if(!data.journal||!data.mid){alert('Journal Name and Manuscript ID are required.');return}
-  const id=document.getElementById('editId').value;
-  if(id){const idx=papers.findIndex(p=>p.id===id);papers[idx]={...papers[idx],...data}}
-  else papers.push({id:uid(),...data});
-  save();closeModal();
-}
-function editPaper(id){openModal(id)}
-function deletePaper(id){if(confirm('Delete this manuscript?')){papers=papers.filter(p=>p.id!==id);save()}}
-function exportData(){
-  const blob=new Blob([JSON.stringify(papers,null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='SIGPRO_Reviewer_Followup_Data.json';a.click();URL.revokeObjectURL(a.href);
-}
-renderAll();
+function priority(p){if(p.stage==='Acceptance Comments'||p.stage==='Next Stage')return 'HIGH';if(p.stage==='Revision'||p.stage==='Re-invite Reviewers')return 'MEDIUM';if(p.stage==='Completed')return 'COMPLETED';return 'NORMAL'}
+function badge(p){const x=priority(p);const cls=x==='HIGH'?'high':x==='MEDIUM'?'medium':x==='COMPLETED'?'complete':'normal';return `<span class="badge ${cls}">${x}</span>`}
+function progress(p){const rs=p.reviewers||[];const rc=rs.filter(r=>r.commentsUploaded).length;const ac=rs.filter(r=>r.acceptanceUploaded).length;return `<div class="small">Reviewer comments: <b>${rc}/3</b><br>Acceptance comments: <b>${ac}/3</b></div>`}
+function renderAll(){renderMetrics();renderAlerts();renderPriority();renderPapers();renderAcceptance();renderJournals()}
+function renderMetrics(){document.getElementById('mTotal').textContent=papers.length;document.getElementById('mAcceptance').textContent=papers.filter(p=>priority(p)==='HIGH').length;document.getElementById('mRevision').textContent=papers.filter(p=>priority(p)==='MEDIUM'&&p.stage==='Revision').length;document.getElementById('mFollow').textContent=papers.filter(p=>priority(p)==='NORMAL').length;document.getElementById('mComplete').textContent=papers.filter(p=>priority(p)==='COMPLETED').length}
+function renderAlerts(){let html='';papers.forEach(p=>{const rs=p.reviewers||[];const rc=rs.filter(r=>r.commentsUploaded).length;const ac=rs.filter(r=>r.acceptanceUploaded).length;if(rc>=2&&!['Revision','Re-invite Reviewers','Acceptance Comments','Next Stage','Completed'].includes(p.stage))html+=`<div class="alert">🔔 <b>REVISION ALERT:</b> ${esc(p.mid)} has ${rc} reviewer comments uploaded. Revision stage required.</div>`;if(ac>=2&&p.stage!=='Completed')html+=`<div class="alert danger">🔔 <b>ACCEPTANCE ALERT:</b> ${esc(p.mid)} has ${ac} acceptance comments uploaded. Acceptance stage requires attention.</div>`});document.getElementById('alerts').innerHTML=html}
+function renderPriority(){const list=papers.filter(p=>priority(p)==='HIGH').sort((a,b)=>(a.date||'').localeCompare(b.date||''));document.getElementById('priorityList').innerHTML=list.length?list.map(p=>`<div class="paper-row"><div><b>${esc(p.mid)}</b><br><span class="muted">${esc(p.journal)} • ${esc(p.author)}</span><br><span class="small">Entered by: ${esc(p.enteredBy||p.enteredByEmail||'Unknown')}</span></div><div>${badge(p)} <button class="btn-primary" onclick="editPaper('${p.id}')">Open</button></div></div>`).join(''):'<div class="empty">No acceptance-priority papers currently.</div>'}
+function renderPapers(){const q=(document.getElementById('search')?.value||'').toLowerCase();const sf=document.getElementById('stageFilter')?.value||'';const pf=document.getElementById('priorityFilter')?.value||'';let arr=papers.filter(p=>(!q||[p.journal,p.mid,p.author,p.enteredBy].join(' ').toLowerCase().includes(q))&&(!sf||p.stage===sf)&&(!pf||priority(p)===pf));document.getElementById('paperTable').innerHTML=arr.length?arr.map(p=>`<tr><td>${badge(p)}</td><td>${esc(p.journal)}</td><td><b>${esc(p.mid)}</b></td><td>${esc(p.author)}</td><td>${esc(p.stage)}</td><td>${esc(p.enteredBy||p.enteredByEmail||'Unknown')}</td><td>${progress(p)}</td><td><button class="btn-primary" onclick="editPaper('${p.id}')">Open</button> <button class="btn-danger" onclick="deletePaper('${p.id}')">Delete</button></td></tr>`).join(''):`<tr><td colspan="8" class="empty">No manuscripts found.</td></tr>`}
+function renderAcceptance(){const arr=papers.filter(p=>priority(p)==='HIGH');document.getElementById('acceptanceList').innerHTML=arr.length?arr.map(p=>`<div class="paper-row"><div><b>${esc(p.mid)}</b><br>${esc(p.journal)}<br><span class="muted">${esc(p.author)}</span><br><span class="small">Entered by: ${esc(p.enteredBy||p.enteredByEmail||'Unknown')}</span></div><div>${progress(p)} ${badge(p)} <button class="btn-primary" onclick="editPaper('${p.id}')">Open</button></div></div>`).join(''):'<div class="empty">No acceptance-priority papers.</div>'}
+function renderJournals(){const groups={};papers.forEach(p=>(groups[p.journal||'Unnamed Journal']??=[]).push(p));const names=Object.keys(groups).sort();document.getElementById('journalList').innerHTML=names.length?names.map(j=>`<div class="journal-block"><div class="journal-title">📚 ${esc(j)} — ${groups[j].length} paper(s)</div>${groups[j].map(p=>`<div class="paper-row"><div><b>${esc(p.mid)}</b><br><span class="muted">${esc(p.author)}</span><br><span class="small">Entered by: ${esc(p.enteredBy||p.enteredByEmail||'Unknown')}</span></div><div>${badge(p)} <button class="btn-primary" onclick="editPaper('${p.id}')">Open</button></div></div>`).join('')}</div>`).join(''):'<div class="empty">No journals yet.</div>'}
+function showTab(tab,btn){activeTab=tab;['dashboard','papers','acceptance','journals'].forEach(x=>document.getElementById(x).style.display=x===tab?'block':'none');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active')} window.showTab=showTab;
+window.openModal=function(id=null){document.getElementById('modal').classList.add('show');document.getElementById('editId').value=id||'';document.getElementById('modalTitle').textContent=id?'Edit Manuscript':'New Manuscript';if(id){const p=papers.find(x=>x.id===id);if(!p)return;document.getElementById('date').value=p.date||'';document.getElementById('journal').value=p.journal||'';document.getElementById('mid').value=p.mid||'';document.getElementById('author').value=p.author||'';document.getElementById('stage').value=p.stage||'Reviewer Assignment';document.getElementById('notes').value=p.notes||'';renderReviewerInputs(p.reviewers||[{}, {}, {}])}else{['date','journal','mid','author','notes'].forEach(x=>document.getElementById(x).value='');document.getElementById('date').value=new Date().toISOString().slice(0,10);document.getElementById('stage').value='Reviewer Assignment';renderReviewerInputs()}}
+window.closeModal=function(){document.getElementById('modal').classList.remove('show')}
+function renderReviewerInputs(rs){rs=rs||[{}, {}, {}];document.getElementById('reviewers').innerHTML=rs.map((r,i)=>`<div class="reviewer-card"><h4>Reviewer ${i+1}</h4><div class="grid3"><label>Reviewer Name<input id="r${i}name" value="${esc(r.name||'')}" placeholder="Reviewer name"></label><label>Assign Date<input type="date" id="r${i}assign" value="${r.assign||''}"></label><label>Agreed Date<input type="date" id="r${i}agree" value="${r.agree||''}"></label><label>Comments Upload Deadline<input type="date" id="r${i}deadline" value="${r.deadline||''}"></label><label>Comments Follow-up Date<input type="date" id="r${i}follow" value="${r.follow||''}"></label><label>Comments Upload Date<input type="date" id="r${i}commentDate" value="${r.commentDate||''}"></label><label>Re-invite Date<input type="date" id="r${i}reinvite" value="${r.reinvite||''}"></label><label>Re-invite Agreed Date<input type="date" id="r${i}reagree" value="${r.reagree||''}"></label><label>Acceptance Comments Deadline<input type="date" id="r${i}adeadline" value="${r.adeadline||''}"></label><label>Acceptance Follow-up Date<input type="date" id="r${i}afollow" value="${r.afollow||''}"></label><label>Acceptance Upload Date<input type="date" id="r${i}acommentDate" value="${r.acommentDate||''}"></label><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="r${i}uploaded" ${r.commentsUploaded?'checked':''} style="width:auto"> Reviewer Comments Uploaded</label><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="r${i}auploaded" ${r.acceptanceUploaded?'checked':''} style="width:auto"> Acceptance Comments Uploaded</label></div></div>`).join('')}
+function getReviewers(){return [0,1,2].map(i=>({name:document.getElementById(`r${i}name`).value.trim(),assign:document.getElementById(`r${i}assign`).value,agree:document.getElementById(`r${i}agree`).value,deadline:document.getElementById(`r${i}deadline`).value,follow:document.getElementById(`r${i}follow`).value,commentDate:document.getElementById(`r${i}commentDate`).value,reinvite:document.getElementById(`r${i}reinvite`).value,reagree:document.getElementById(`r${i}reagree`).value,adeadline:document.getElementById(`r${i}adeadline`).value,afollow:document.getElementById(`r${i}afollow`).value,acommentDate:document.getElementById(`r${i}acommentDate`).value,commentsUploaded:document.getElementById(`r${i}uploaded`).checked,acceptanceUploaded:document.getElementById(`r${i}auploaded`).checked}))}
+window.savePaper=async function(){const data={date:document.getElementById('date').value,journal:document.getElementById('journal').value.trim(),mid:document.getElementById('mid').value.trim(),author:document.getElementById('author').value.trim(),reviewers:getReviewers(),stage:document.getElementById('stage').value,notes:document.getElementById('notes').value.trim()};if(!data.journal||!data.mid){alert('Journal Name and Manuscript ID are required.');return}const id=document.getElementById('editId').value||uid();const old=papers.find(p=>p.id===id);const payload={...old,...data,id,enteredBy:old?.enteredBy||currentUser?.email||'Unknown',enteredByEmail:old?.enteredByEmail||currentUser?.email||'',updatedBy:currentUser?.email||'',updatedAt:new Date().toISOString()};try{await dbRequest(`reviewerFollowup/papers/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify(payload)});closeModal();await loadSharedPapers()}catch(err){console.error(err);showDbError(err)}}
+window.editPaper=function(id){openModal(id)}; window.deletePaper=async function(id){if(!confirm('Delete this manuscript for ALL three members?'))return;try{await dbRequest(`reviewerFollowup/papers/${encodeURIComponent(id)}`,{method:'DELETE'});await loadSharedPapers()}catch(err){console.error(err);showDbError(err)}};
+window.exportData=function(){const blob=new Blob([JSON.stringify(papers,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='SIGPRO_Reviewer_Followup_Shared_Data.json';a.click();URL.revokeObjectURL(a.href)};
+window.addEventListener('load',()=>{
+  const form=document.getElementById('loginForm');
+  if(form) form.addEventListener('submit',e=>{e.preventDefault();window.loginUser();});
+  document.getElementById('loginPassword')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();window.loginUser();}});
+  document.getElementById('search')?.addEventListener('input',renderPapers);document.getElementById('stageFilter')?.addEventListener('change',renderPapers);document.getElementById('priorityFilter')?.addEventListener('change',renderPapers);initApp()});
 </script>
 </body>
 </html>
